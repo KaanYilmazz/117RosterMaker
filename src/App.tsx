@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { Coffee, Users, Clock, Calendar, Zap } from 'lucide-react';
+import { Coffee, Users, Clock, Calendar, Zap, View } from 'lucide-react';
 import EmployeeManager from './components/EmployeeManager';
 import ShiftManager from './components/ShiftManager';
 import AvailabilityManager from './components/AvailabilityManager';
 import RosterGenerator from './components/RosterGenerator';
 import WeeklyRosterView from './components/WeeklyRosterView';
 import { Employee, Shift, Availability, RosterEntry } from './types';
-import { doc, collection, addDoc, getDocs,  deleteDoc, updateDoc} from "firebase/firestore";
+import { doc, collection, addDoc, setDoc, getDocs, deleteDoc, updateDoc,onSnapshot  } from "firebase/firestore";
 import { db } from "./firebase";
+import RosterView from './components/RosterView';
 
 function App() {
   const [activeTab, setActiveTab] = useState('employees');
@@ -29,114 +30,184 @@ function App() {
     if (savedRoster) setRoster(JSON.parse(savedRoster));
   }, []);
 
-  // Save data to localStorage whenever state changes
   useEffect(() => {
-    localStorage.setItem('cafeEmployees', JSON.stringify(employees));
-  }, [employees]);
+    const fetchEmployees = async () => {
+      const snapshot = await getDocs(collection(db, "employees"));
+      const employeesData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+      })) as Employee[];
 
+      setEmployees(employeesData);
+    };
 
-  useEffect(() => {
-  const fetchShifts = async () => {
-    const querySnapshot = await getDocs(collection(db, "shifts"));
-    const shiftsData = querySnapshot.docs.map(doc => ({
-      id: doc.id, // Firestore’un verdiği id
-      ...doc.data(),
-    })) as Shift[];
-    setShifts(shiftsData);
-  };
+    fetchEmployees();
+  }, []);
 
-  fetchShifts();
-}, []);
 
   useEffect(() => {
-    localStorage.setItem('cafeAvailabilities', JSON.stringify(availabilities));
-  }, [availabilities]);
+    const fetchShifts = async () => {
+      const querySnapshot = await getDocs(collection(db, "shifts"));
+      const shiftsData = querySnapshot.docs.map(doc => ({
+        id: doc.id, // Firestore’un verdiği id
+        ...doc.data(),
+      })) as Shift[];
+      setShifts(shiftsData);
+    };
+
+    fetchShifts();
+  }, []);
 
   useEffect(() => {
-    localStorage.setItem('cafeRoster', JSON.stringify(roster));
-  }, [roster]);
+    const fetchAvailabilities = async () => {
+      const querySnapshot = await getDocs(collection(db, "availabilities"));
+      const data: Availability[] = querySnapshot.docs.map(docSnap => ({
+        ...(docSnap.data() as Omit<Availability, "id">),
+        id: docSnap.id,
+      }));
+      setAvailabilities(data);
+    };
 
-  // Employee management functions
-  const addEmployee = (employee: Omit<Employee, 'id'>) => {
+    fetchAvailabilities();
+  }, []);
+
+
+  // Roster fetch
+  useEffect(() => {
+    const fetchRoster = async () => {
+      try {
+  const rosterRef = collection(db, "rosters");
+
+        const unsubscribe = onSnapshot(rosterRef, (snapshot) => {
+          const data = snapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+          }));
+          setRoster(data as RosterEntry[]);
+        });
+
+        // cleanup
+        return () => unsubscribe();
+      } catch (error) {
+        console.error("Error fetching roster:", error);
+      }
+    };
+    fetchRoster();
+  }, []);
+
+  // Çalışan ekleme
+  const addEmployee = async (employee: Omit<Employee, "id">) => {
+    const docRef = await addDoc(collection(db, "employees"), employee);
+
     const newEmployee: Employee = {
       ...employee,
-      id: Date.now().toString()
+      id: docRef.id, // Firestore id
     };
-    setEmployees([...employees, newEmployee]);
+
+    setEmployees(prev => [...prev, newEmployee]);
   };
 
-  const updateEmployee = (id: string, employee: Omit<Employee, 'id'>) => {
-    setEmployees(employees.map(emp => emp.id === id ? { ...employee, id } : emp));
+  // Çalışan güncelleme
+  const updateEmployee = async (id: string, employee: Omit<Employee, "id">) => {
+    await updateDoc(doc(db, "employees", id), employee);
+
+    setEmployees(prev =>
+      prev.map(emp => (emp.id === id ? { ...employee, id } : emp))
+    );
   };
 
-  const deleteEmployee = (id: string) => {
-    setEmployees(employees.filter(emp => emp.id !== id));
-    setAvailabilities(availabilities.filter(avail => avail.employeeId !== id));
-    setRoster(roster.filter(entry => entry.employeeId !== id));
-  };
+  // Çalışan silme
+  const deleteEmployee = async (id: string) => {
+    await deleteDoc(doc(db, "employees", id));
 
-  // Shift management functions
-  const addShift =async (shift: Omit<Shift, 'id'>) => {
+    setEmployees(prev => prev.filter(emp => emp.id !== id));
+    setAvailabilities(prev => prev.filter(avail => avail.employeeId !== id));
+    setRoster(prev => prev.filter(entry => entry.employeeId !== id));
+  };
+  const addShift = async (shift: Omit<Shift, "id">) => {
+    const docRef = await addDoc(collection(db, "shifts"), shift);
+
     const newShift: Shift = {
       ...shift,
-      id: crypto.randomUUID()
+      id: docRef.id, // Firestore’un verdiği gerçek id
     };
-     // Firestore’a kaydet
-     console.log("Adding shift:", newShift);
-  await addDoc(collection(db, "shifts"), newShift);
 
-  // Local state’i de güncelle
-    setShifts(prev => [...prev, newShift]); // ✅ her seferinde en güncel listeyi alır
+    setShifts(prev => [...prev, newShift]);
   };
 
-// Silme
-const deleteShift = async (id: string) => {
-  await deleteDoc(doc(db, "shifts", id));
-  setShifts(prev => prev.filter(s => s.id !== id));
-};
+  // Silme
+  const deleteShift = async (id: string) => {
+    await deleteDoc(doc(db, "shifts", id));
+    setShifts(prev => prev.filter(s => s.id !== id));
+  };
 
-// Güncelleme
-const updateShift = async (id: string, data: Partial<Shift>) => {
-  await updateDoc(doc(db, "shifts", id), data);
-  setShifts(prev =>
-    prev.map(s => (s.id === id ? { ...s, ...data } : s))
-  );
-};
-
-  // Availability management functions
-  const updateAvailability = (employeeId: string, day: string, availability: Partial<Availability>) => {
-    const existingIndex = availabilities.findIndex(
-      a => a.employeeId === employeeId && a.day === day
+  // Güncelleme
+  const updateShift = async (id: string, data: Partial<Shift>) => {
+    await updateDoc(doc(db, "shifts", id), data);
+    setShifts(prev =>
+      prev.map(s => (s.id === id ? { ...s, ...data } : s))
     );
+  };
 
-    if (existingIndex >= 0) {
-      const updated = [...availabilities];
-      updated[existingIndex] = { ...updated[existingIndex], ...availability };
-      setAvailabilities(updated);
-    } else {
+  const updateAvailability = async (
+    employeeId: string,
+    day: string,
+    availability: Partial<Availability>
+  ) => {
+    try {
+      // Unique docId (employeeId + day)
+      const docId = `${employeeId}_${day}`;
+      const ref = doc(db, "availabilities", docId);
+
       const newAvailability: Availability = {
+        id: docId,
         employeeId,
         day,
-        startTime: '09:00',
-        endTime: '17:00',
-        isAvailable: false,
-        ...availability
+        startTime: "00:01",
+        endTime: "23:59",
+        isAvailable: true,
+        ...availability,
       };
-      setAvailabilities([...availabilities, newAvailability]);
+
+      await setDoc(ref, newAvailability); // Firestore’a kaydet
+      setAvailabilities(prev => {
+        const existingIndex = prev.findIndex(a => a.id === docId);
+        if (existingIndex >= 0) {
+          const updated = [...prev];
+          updated[existingIndex] = newAvailability;
+          return updated;
+        } else {
+          return [...prev, newAvailability];
+        }
+      });
+    } catch (error) {
+      console.error("Error updating availability:", error);
     }
   };
 
-  // Roster generation function
-  const generateRoster = (newRoster: RosterEntry[]) => {
-    setRoster(newRoster);
+  const generateRoster = async (roster: RosterEntry) => {
+    const ref = doc(db, "rosters", roster.id); // id'yi kendimiz generate ediyorsak burada kullan
+    await setDoc(ref, roster);
+    setRoster(prev => {
+      const existingIndex = prev.findIndex(r => r.id === roster.id);
+      if (existingIndex >= 0) {
+        const updated = [...prev];
+        updated[existingIndex] = roster;
+        return updated;
+      } else {
+        return [...prev, roster];
+      }
+    });
   };
+
 
   const tabs = [
     { id: 'employees', label: 'Staff', icon: Users },
     { id: 'shifts', label: 'Shifts', icon: Clock },
     { id: 'availability', label: 'Availability', icon: Calendar },
     { id: 'roster', label: 'Magic Roster', icon: Zap },
-    { id: 'weekly', label: 'Weekly View', icon: Calendar }
+    { id: 'weekly', label: 'Weekly View', icon: Calendar },
+    { id: 'rosterView', label: 'Roster View', icon: View },
   ];
 
   return (
@@ -154,7 +225,7 @@ const updateShift = async (id: string, data: Partial<Shift>) => {
                 <p className="text-sm text-gray-500">Staff scheduling made simple</p>
               </div>
             </div>
-            
+
             <div className="flex items-center gap-6 text-sm text-gray-600">
               <span>{employees.length} staff members</span>
               <span>{shifts.length} shifts</span>
@@ -171,16 +242,15 @@ const updateShift = async (id: string, data: Partial<Shift>) => {
             {tabs.map((tab) => {
               const Icon = tab.icon;
               const isActive = activeTab === tab.id;
-              
+
               return (
                 <button
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id)}
-                  className={`flex items-center gap-2 py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
-                    isActive
-                      ? 'border-amber-500 text-amber-600'
-                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                  }`}
+                  className={`flex items-center gap-2 py-4 px-1 border-b-2 font-medium text-sm transition-colors ${isActive
+                    ? 'border-amber-500 text-amber-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                    }`}
                 >
                   <Icon className="w-4 h-4" />
                   {tab.label}
@@ -235,6 +305,12 @@ const updateShift = async (id: string, data: Partial<Shift>) => {
             shifts={shifts}
             roster={roster}
             onUpdateRoster={setRoster}
+          />
+        )}
+        {activeTab === 'rosterView' && (
+          <RosterView
+            employees={employees}
+            roster={roster}
           />
         )}
       </main>

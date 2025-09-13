@@ -86,7 +86,7 @@ export default function AvailabilityManager({ employees, availabilities, onUpdat
                   
                   <div className="p-4">
                     <div className="grid gap-4">
-                      {DAYS_OF_WEEK.map((day) => {
+                      {DAYS_OF_WEEK.filter(d => d !== "Everyday").map((day) => {
                         const availability = getAvailability(employee.id, day);
                         const isAvailable = availability?.isAvailable || false;
                         
@@ -97,8 +97,8 @@ export default function AvailabilityManager({ employees, availabilities, onUpdat
                               <button
                                 onClick={() => updateAvailability(employee.id, day, { 
                                   isAvailable: !isAvailable,
-                                  startTime: availability?.startTime || '09:00',
-                                  endTime: availability?.endTime || '17:00'
+                                  startTime: availability?.startTime || '05:00',
+                                  endTime: availability?.endTime || '23:00'
                                 })}
                                 className={`flex items-center gap-2 px-3 py-1 rounded-full text-sm font-medium transition-colors ${
                                   isAvailable
@@ -125,7 +125,7 @@ export default function AvailabilityManager({ employees, availabilities, onUpdat
                                 <Clock className="w-4 h-4 text-gray-400" />
                                 <input
                                   type="time"
-                                  value={availability?.startTime || '09:00'}
+                                  value={availability?.startTime || '05:00'}
                                   onChange={(e) => updateAvailability(employee.id, day, { 
                                     startTime: e.target.value,
                                     isAvailable: true
@@ -135,7 +135,7 @@ export default function AvailabilityManager({ employees, availabilities, onUpdat
                                 <span className="text-gray-400">to</span>
                                 <input
                                   type="time"
-                                  value={availability?.endTime || '17:00'}
+                                  value={availability?.endTime || '23:00'}
                                   onChange={(e) => updateAvailability(employee.id, day, { 
                                     endTime: e.target.value,
                                     isAvailable: true

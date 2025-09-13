@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { Zap, Users, Calendar, Clock, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { Employee, Shift, Availability, RosterEntry, POSITION_LABELS, POSITION_COLORS, DAYS_OF_WEEK } from '../types';
+import { collection, getDocs, deleteDoc, addDoc } from "firebase/firestore";
+import { db } from "./../firebase";
 
 interface Props {
   employees: Employee[];
@@ -14,88 +16,105 @@ export default function RosterGenerator({ employees, shifts, availabilities, ros
   const [isGenerating, setIsGenerating] = useState(false);
   const [selectedWeek, setSelectedWeek] = useState('current');
 
-  const generateRoster = async () => {
-    setIsGenerating(true);
-    
-    // Simulate processing time
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    
-    const newRoster: RosterEntry[] = [];
-    const employeeShiftCounts: Record<string, number> = {};
-    
-    // Initialize shift counts
-    employees.forEach(emp => {
-      employeeShiftCounts[emp.id] = 0;
+const generateRoster = async () => {
+  setIsGenerating(true);
+
+  // Simulate processing time
+  await new Promise(resolve => setTimeout(resolve, 1500));
+
+  const newRoster: RosterEntry[] = [];
+  const employeeShiftCounts: Record<string, number> = {};
+
+  // Initialize shift counts
+  employees.forEach(emp => {
+    employeeShiftCounts[emp.id] = 0;
+  });
+
+  // Sort shifts by priority
+  const sortedShifts = [...shifts].sort((a, b) => {
+    if (a.requiredPosition && !b.requiredPosition) return -1;
+    if (!a.requiredPosition && b.requiredPosition) return 1;
+    return b.minStaffCount - a.minStaffCount;
+  });
+
+  sortedShifts.forEach(shift => {
+    const availableEmployees = employees.filter(emp => {
+      const availability = availabilities.find(
+        a => a.employeeId === emp.id && a.day === shift.day && a.isAvailable
+      );
+
+      if (!availability) return false;
+
+      const shiftStart = new Date(`2000-01-01T${shift.startTime}`);
+      const shiftEnd = new Date(`2000-01-01T${shift.endTime}`);
+      const availStart = new Date(`2000-01-01T${availability.startTime}`);
+      const availEnd = new Date(`2000-01-01T${availability.endTime}`);
+
+      const canWork = availStart <= shiftStart && availEnd >= shiftEnd;
+
+      const positionMatch = !shift.requiredPosition || emp.position === shift.requiredPosition;
+
+      const hasConflict = newRoster.some(entry =>
+        entry.employeeId === emp.id &&
+        entry.day === shift.day &&
+        (
+          (new Date(`2000-01-01T${entry.startTime}`) <= shiftStart &&
+           new Date(`2000-01-01T${entry.endTime}`) > shiftStart) ||
+          (new Date(`2000-01-01T${entry.startTime}`) < shiftEnd &&
+           new Date(`2000-01-01T${entry.endTime}`) >= shiftEnd)
+        )
+      );
+
+      return canWork && positionMatch && !hasConflict;
     });
-    
-    // Sort shifts by priority (required positions first, then by minimum staff count)
-    const sortedShifts = [...shifts].sort((a, b) => {
-      if (a.requiredPosition && !b.requiredPosition) return -1;
-      if (!a.requiredPosition && b.requiredPosition) return 1;
-      return b.minStaffCount - a.minStaffCount;
+
+    availableEmployees.sort((a, b) => {
+      const countDiff = employeeShiftCounts[a.id] - employeeShiftCounts[b.id];
+      if (countDiff !== 0) return countDiff;
+
+      const positionOrder = [
+        "1manager",
+        "2assistant-manager",
+        "3head-barista",
+        "4senior-staff",
+        "5regular-staff",
+        "6part-time-staff"
+      ];
+      return positionOrder.indexOf(a.position) - positionOrder.indexOf(b.position);
     });
-    
-    sortedShifts.forEach(shift => {
-      const availableEmployees = employees.filter(emp => {
-        // Check if employee is available for this day and time
-        const availability = availabilities.find(
-          a => a.employeeId === emp.id && a.day === shift.day && a.isAvailable
-        );
-        
-        if (!availability) return false;
-        
-        // Check time overlap
-        const shiftStart = new Date(`2000-01-01T${shift.startTime}`);
-        const shiftEnd = new Date(`2000-01-01T${shift.endTime}`);
-        const availStart = new Date(`2000-01-01T${availability.startTime}`);
-        const availEnd = new Date(`2000-01-01T${availability.endTime}`);
-        
-        const canWork = availStart <= shiftStart && availEnd >= shiftEnd;
-        
-        // Check position requirements
-        const positionMatch = !shift.requiredPosition || emp.position === shift.requiredPosition;
-        
-        // Check if employee isn't already scheduled for overlapping shifts
-        const hasConflict = newRoster.some(entry => 
-          entry.employeeId === emp.id && 
-          entry.day === shift.day &&
-          (
-            (new Date(`2000-01-01T${entry.startTime}`) <= shiftStart && new Date(`2000-01-01T${entry.endTime}`) > shiftStart) ||
-            (new Date(`2000-01-01T${entry.startTime}`) < shiftEnd && new Date(`2000-01-01T${entry.endTime}`) >= shiftEnd)
-          )
-        );
-        
-        return canWork && positionMatch && !hasConflict;
+
+    const assignedCount = Math.min(shift.minStaffCount, availableEmployees.length);
+
+    for (let i = 0; i < assignedCount; i++) {
+      const employee = availableEmployees[i];
+      newRoster.push({       
+        shiftId: shift.id,
+        employeeId: employee.id,
+        day: shift.day,
+        startTime: shift.startTime,
+        endTime: shift.endTime
       });
-      
-      // Sort available employees by shift count (fairness) and position hierarchy
-      availableEmployees.sort((a, b) => {
-        const countDiff = employeeShiftCounts[a.id] - employeeShiftCounts[b.id];
-        if (countDiff !== 0) return countDiff;
-        
-        // Position priority (higher positions get preference for required shifts)
-        const positionOrder = ['manager', 'assistant-manager', 'head-barista', 'senior-staff', 'regular-staff', 'part-time-staff'];
-        return positionOrder.indexOf(a.position) - positionOrder.indexOf(b.position);
-      });
-      
-      // Assign employees to shift
-      const assignedCount = Math.min(shift.minStaffCount, availableEmployees.length);
-      for (let i = 0; i < assignedCount; i++) {
-        const employee = availableEmployees[i];
-        newRoster.push({
-          shiftId: shift.id,
-          employeeId: employee.id,
-          day: shift.day,
-          startTime: shift.startTime,
-          endTime: shift.endTime
-        });
-        employeeShiftCounts[employee.id]++;
-      }
-    });
-    
-    setIsGenerating(false);
-    onGenerateRoster(newRoster);
-  };
+      employeeShiftCounts[employee.id]++;
+    }
+  });
+
+// Firestore referansı
+  const rosterRef = collection(db, "rosters");
+
+  // 1. Önce mevcut roaster kayıtlarını sil
+  const snapshot = await getDocs(rosterRef);
+  const deletePromises = snapshot.docs.map(doc => deleteDoc(doc.ref));
+  await Promise.all(deletePromises);
+
+  // 2. Yeni roaster'ı ekle
+  const addPromises = newRoster.map(entry => addDoc(rosterRef, entry));
+  await Promise.all(addPromises);
+
+  setIsGenerating(false);
+
+  // 3. State güncelle
+  onGenerateRoster(newRoster);
+};
 
   const getShiftCoverage = () => {
     const coverage = {
