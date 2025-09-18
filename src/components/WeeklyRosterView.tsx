@@ -261,9 +261,6 @@ export default function WeeklyRosterView({ employees, shifts, roster, onUpdateRo
                                       <div className="flex items-center gap-2">
                                         <Users className="w-4 h-4 text-gray-400" />
                                         <span className="font-medium text-gray-900 text-sm">{employee.name}</span>
-                                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${POSITION_COLORS[employee.position]}`}>
-                                          {POSITION_LABELS[employee.position]}
-                                        </span>
                                       </div>
 
                                       {!swapMode && (

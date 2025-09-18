@@ -19,18 +19,21 @@ export default function RosterGenerator({ employees, shifts, availabilities, ros
 const generateRoster = async () => {
   setIsGenerating(true);
 
-  // Simulate processing time
   await new Promise(resolve => setTimeout(resolve, 1500));
 
   const newRoster: RosterEntry[] = [];
-  const employeeShiftCounts: Record<string, number> = {};
 
-  // Initialize shift counts
+  // Çalışan bazında shift ve gün sayısı + saat hesabı
+  const employeeShiftCounts: Record<string, number> = {};
+  const employeeDayCounts: Record<string, Set<string>> = {};
+  const employeeHours: Record<string, number> = {};
+
   employees.forEach(emp => {
     employeeShiftCounts[emp.id] = 0;
+    employeeDayCounts[emp.id] = new Set();
+    employeeHours[emp.id] = 0;
   });
 
-  // Sort shifts by priority
   const sortedShifts = [...shifts].sort((a, b) => {
     if (a.requiredPosition && !b.requiredPosition) return -1;
     if (!a.requiredPosition && b.requiredPosition) return 1;
@@ -38,6 +41,10 @@ const generateRoster = async () => {
   });
 
   sortedShifts.forEach(shift => {
+    const shiftStart = new Date(`2000-01-01T${shift.startTime}`);
+    const shiftEnd = new Date(`2000-01-01T${shift.endTime}`);
+    const shiftHours = (shiftEnd.getTime() - shiftStart.getTime()) / (1000 * 60 * 60);
+
     const availableEmployees = employees.filter(emp => {
       const availability = availabilities.find(
         a => a.employeeId === emp.id && a.day === shift.day && a.isAvailable
@@ -45,15 +52,19 @@ const generateRoster = async () => {
 
       if (!availability) return false;
 
-      const shiftStart = new Date(`2000-01-01T${shift.startTime}`);
-      const shiftEnd = new Date(`2000-01-01T${shift.endTime}`);
       const availStart = new Date(`2000-01-01T${availability.startTime}`);
       const availEnd = new Date(`2000-01-01T${availability.endTime}`);
-
       const canWork = availStart <= shiftStart && availEnd >= shiftEnd;
 
       const positionMatch = !shift.requiredPosition || emp.position === shift.requiredPosition;
 
+      // Hard constraint 1: Aynı gün sadece 1 shift
+      if (employeeDayCounts[emp.id].has(shift.day)) return false;
+
+      // Hard constraint 2: En fazla 5 gün çalışma
+      if (employeeDayCounts[emp.id].size >= 5) return false;
+
+      // Çakışma kontrolü (zaten vardı)
       const hasConflict = newRoster.some(entry =>
         entry.employeeId === emp.id &&
         entry.day === shift.day &&
@@ -69,9 +80,19 @@ const generateRoster = async () => {
     });
 
     availableEmployees.sort((a, b) => {
+      // Soft constraint: saat hedeflerine yakınlık
+      const targetHoursA = a.position !== "6part-time-staff" ? 37.5 : 20;
+      const targetHoursB = b.position !== "6part-time-staff" ? 37.5 : 20;
+      const diffA = targetHoursA - employeeHours[a.id];
+      const diffB = targetHoursB - employeeHours[b.id];
+
+      if (diffA !== diffB) return diffB - diffA; // ihtiyacı daha fazla olan öne gelsin
+
+      // Shift sayısı daha az olan öne gelsin
       const countDiff = employeeShiftCounts[a.id] - employeeShiftCounts[b.id];
       if (countDiff !== 0) return countDiff;
 
+      // Pozisyona göre sıralama (senin mevcut mantığın)
       const positionOrder = [
         "1manager",
         "2assistant-manager",
@@ -87,7 +108,7 @@ const generateRoster = async () => {
 
     for (let i = 0; i < assignedCount; i++) {
       const employee = availableEmployees[i];
-      newRoster.push({       
+      newRoster.push({
         shiftId: shift.id,
         employeeId: employee.id,
         day: shift.day,
@@ -95,26 +116,23 @@ const generateRoster = async () => {
         endTime: shift.endTime
       });
       employeeShiftCounts[employee.id]++;
+      employeeDayCounts[employee.id].add(shift.day);
+      employeeHours[employee.id] += shiftHours;
     }
   });
 
-// Firestore referansı
+  // Firestore kısmın aynı kalıyor
   const rosterRef = collection(db, "rosters");
-
-  // 1. Önce mevcut roaster kayıtlarını sil
   const snapshot = await getDocs(rosterRef);
   const deletePromises = snapshot.docs.map(doc => deleteDoc(doc.ref));
   await Promise.all(deletePromises);
-
-  // 2. Yeni roaster'ı ekle
   const addPromises = newRoster.map(entry => addDoc(rosterRef, entry));
   await Promise.all(addPromises);
 
   setIsGenerating(false);
-
-  // 3. State güncelle
   onGenerateRoster(newRoster);
 };
+
 
   const getShiftCoverage = () => {
     const coverage = {
